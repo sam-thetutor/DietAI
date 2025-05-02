@@ -1,3 +1,4 @@
+
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
@@ -148,9 +149,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Failed to parse AI meal plan response.' }, { status: 500 });
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error calling Gemini API for meal plan:', error);
-    const message = error.message || 'Failed to generate meal plan.';
+    // Type guard to safely access message property
+    const message = error instanceof Error ? error.message : 'Failed to generate meal plan.';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

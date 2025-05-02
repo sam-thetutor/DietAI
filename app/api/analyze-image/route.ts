@@ -1,3 +1,5 @@
+// Remove @ts-nocheck
+
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
@@ -12,24 +14,66 @@ if (!API_KEY) {
 }
 
 export async function POST(request: Request) {
-  if (!API_KEY) {
-    return NextResponse.json({ error: 'API key not configured.' }, { status: 500 });
-  }
+  console.log("--- API /api/analyze-image received request ---"); // Log request start
 
+  let requestBody;
   try {
-    const body = await request.json();
-    const { imageBase64 } = body;
+    // --- START: Detailed Request Body Logging ---
+    // Clone the request to read the body safely multiple times if needed
+    const clonedRequest = request.clone();
+    try {
+        requestBody = await clonedRequest.json();
+        console.log("Received JSON body:", JSON.stringify(requestBody, null, 2)); // Log the parsed JSON
+    } catch (jsonError) {
+        console.error("Failed to parse request body as JSON:", jsonError);
+        // Try reading as text if JSON parsing fails
+        try {
+            const textBody = await request.text(); // Use original request here
+            console.log("Received body as text (potential issue):", textBody.substring(0, 500) + (textBody.length > 500 ? "..." : ""));
+        } catch (textError) {
+            console.error("Failed to read request body as text:", textError);
+        }
+        return NextResponse.json({ error: 'Invalid request body format. Expected JSON.' }, { status: 400 });
+    }
+    // --- END: Detailed Request Body Logging ---
 
-    if (!imageBase64 || typeof imageBase64 !== 'string' || !imageBase64.startsWith('data:image')) {
-      return NextResponse.json({ error: 'Invalid image data provided.' }, { status: 400 });
+    // Check if the 'image' property exists in the parsed body
+    if (!requestBody || typeof requestBody !== 'object' || !('image' in requestBody)) {
+        console.error("Request body is missing 'image' property.");
+        return NextResponse.json({ error: "Request body must contain an 'image' property." }, { status: 400 });
     }
 
-    const match = imageBase64.match(/^data:(image\/\w+);base64,(.*)$/);
-    if (!match || match.length !== 3) {
-        return NextResponse.json({ error: 'Invalid image data format.' }, { status: 400 });
+    const imageData = requestBody.image;
+
+    // --- START: Image Data Validation Logging ---
+    console.log("Extracted imageData type:", typeof imageData);
+    if (typeof imageData === 'string') {
+        console.log("imageData starts with:", imageData.substring(0, 70)); // Log start of string
+        console.log("imageData length:", imageData.length); // Log length
+    } else {
+        console.log("imageData is not a string.");
     }
-    const mimeType = match[1];
-    const base64Data = match[2];
+    // --- END: Image Data Validation Logging ---
+
+    // Validate the image data format (Data URL)
+    if (!imageData || typeof imageData !== 'string' || !imageData.startsWith('data:image/')) {
+      console.error("Validation Failed: Invalid image data format received."); // More specific log
+      return NextResponse.json({ error: 'Invalid image data provided. Expected data URL string.' }, { status: 400 });
+    }
+    console.log("Image data format validation passed."); // Log success
+
+    // Extract mime type and base64 data (rest of the function remains the same)
+    const mimeTypeMatch = imageData.match(/^data:(image\/\w+);base64,/);
+    if (!mimeTypeMatch) {
+        console.error("Could not extract mime type from data URL.");
+        return NextResponse.json({ error: 'Invalid image data URL format.' }, { status: 400 });
+    }
+    const mimeType = mimeTypeMatch[1];
+    const base64Data = imageData.substring(mimeTypeMatch[0].length);
+
+    if (!API_KEY) {
+      return NextResponse.json({ error: 'API key not configured.' }, { status: 500 });
+    }
 
     const genAI = new GoogleGenerativeAI(API_KEY);
     const model = genAI.getGenerativeModel({ model: MODEL_NAME });
@@ -60,7 +104,7 @@ export async function POST(request: Request) {
       },
       {
         // Updated prompt asking for items and calories in JSON
-        text: `Analyze the food item(s) in this image. Identify the main distinct food items visible (e.g., "apple", "sandwich", "salad"). Estimate the total calories for the entire portion shown. Respond ONLY with a valid JSON object containing two keys: "estimatedCalories" (numerical value or null if unknown) and "foodItems" (an array of strings representing the identified food items, or an empty array [] if none identified). Example: {"estimatedCalories": 450, "foodItems": ["chicken sandwich", "side salad"]}`
+        text: `Analyze the food item(s) in this image. Identify the main distinct food items visible (e.g., "apple", "sandwich", "salad"). Estimate the total calories for the entire portion shown. Respond ONLY with a valid JSON object containing two keys: "estimatedCalories" (numerical value or null if unknown) and "foodItems" (an array of strings representing the identified food items, or an empty array [] if none identified). Example: {"estimatedCalories": 450, "foodItems": ["chicken sandwich", "side salad"]} dont put the word simulated anywhere on your re`
       },
     ];
 
@@ -90,8 +134,8 @@ export async function POST(request: Request) {
 
         // Validate the structure
         if (jsonResponse && typeof jsonResponse.estimatedCalories !== 'undefined' && Array.isArray(jsonResponse.foodItems)) {
-             const calories = jsonResponse.estimatedCalories === null ? null : Number(jsonResponse.estimatedCalories);
-             const foodItems = jsonResponse.foodItems.filter((item: any) => typeof item === 'string'); // Ensure items are strings
+             const calories : number | null = jsonResponse.estimatedCalories === null ? null : Number(jsonResponse.estimatedCalories);
+             const foodItems : string[] = jsonResponse.foodItems.filter((item: string) => typeof item === 'string'); // Ensure items are strings
 
              if (calories === null || !isNaN(calories)) {
                 console.log("Parsed Response:", { estimatedCalories: calories, foodItems: foodItems });
@@ -113,10 +157,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: errorMessage }, { status: 500 });
     }
 
-  } catch (error: any) {
-    console.error('Error calling Gemini API:', error);
-    // Include more details from the error if available
-    const message = error.message || 'Failed to analyze image with AI.';
+  } catch (error: unknown) {
+    console.error('--- Uncaught Error in /api/analyze-image ---:', error); // Log any other errors
+    const message = error instanceof Error ? error.message : 'Failed to analyze image due to server error.';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

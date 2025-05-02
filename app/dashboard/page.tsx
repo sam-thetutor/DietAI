@@ -2,14 +2,6 @@
 
 import Link from "next/link";
 import { Card, Button } from "../components/DemoComponents"; // Adjust path as needed
-import { useAccount } from "wagmi";
-import {
-  Name,
-  Identity,
-  Address,
-  Avatar,
-  EthBalance,
-} from "@coinbase/onchainkit/identity";
 import { useState, useEffect, useMemo } from "react";
 import {
     ResponsiveContainer,
@@ -21,34 +13,37 @@ import {
     CartesianGrid,
     ReferenceLine
 } from 'recharts'; // Import Recharts components
+import { useAccount } from "wagmi";
+import { HealthProfile, AllCalories, MealCalories, CalorieLogEntry } from "@/src/lib/types"; // Assuming types are defined here
 
 // --- Updated Types (Match track/page.tsx) ---
-type HealthGoal = "weight_loss" | "weight_gain" | "maintenance";
-type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
+// type HealthGoal = "weight_loss" | "weight_gain" | "maintenance";
+// type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
 
-interface HealthProfile {
-  age: number | "";
-  gender: string;
-  height: number | "";
-  weight: number | "";
-  goal: HealthGoal;
-  activityLevel: ActivityLevel;
-  restrictions: string;
-  calorieTarget: number | "";
-}
+// interface HealthProfile {
+//   age: number | "";
+//   gender: string;
+//   height: number | "";
+//   weight: number | "";
+//   goal: HealthGoal;
+//   activityLevel: ActivityLevel;
+//   restrictions: string;
+//   calorieTarget: number | "";
+// }
 
-interface MealCalories {
-  breakfast: number | "";
-  lunch: number | "";
-  supper: number | "";
-  breakfastItems?: string[];
-  lunchItems?: string[];
-  supperItems?: string[];
-}
+// interface MealCalories {
+//   breakfast: number | "";
+//   lunch: number | "";
+//   supper: number | "";
+//   // Use CalorieLogEntry array instead of string array
+//   breakfastItems?: CalorieLogEntry[];
+//   lunchItems?: CalorieLogEntry[];
+//   supperItems?: CalorieLogEntry[];
+// }
 
-interface AllCalories {
-  [dateKey: string]: MealCalories;
-}
+// interface AllCalories {
+//   [dateKey: string]: MealCalories;
+// }
 // --- End Updated Types ---
 
 // New Type for Meal Plan
@@ -59,7 +54,7 @@ interface MealPlan {
 }
 
 const PROFILE_STORAGE_KEY = "caloai-healthProfile";
-const CALORIES_STORAGE_KEY = "caloai-dailyCalories";
+const CALORIES_STORAGE_KEY = "caloai-allCalories";
 const MEAL_PLAN_STORAGE_KEY = "caloai-mealPlan"; // Key for stored plan
 
 // Helper function to format date as YYYY-MM-DD
@@ -77,11 +72,12 @@ const calculateDailyTotal = (meals: MealCalories | undefined): number => {
 };
 
 export default function DashboardPage() {
-  const { address } = useAccount();
   const [profile, setProfile] = useState<HealthProfile | null>(null);
   const [allCalories, setAllCalories] = useState<AllCalories>({});
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isLoadingCalories, setIsLoadingCalories] = useState(true);
+  const { address, isConnected } = useAccount(); // <-- Get address
+
 
   // --- State for Recommendations ---
   const [recommendations, setRecommendations] = useState<string[]>([]);
@@ -98,7 +94,7 @@ export default function DashboardPage() {
   useEffect(() => {
     setIsLoadingProfile(true);
     try {
-      const storedProfile = localStorage.getItem(PROFILE_STORAGE_KEY);
+      const storedProfile = localStorage.getItem(`${PROFILE_STORAGE_KEY}-${address}`);
       if (storedProfile) {
         const parsed = JSON.parse(storedProfile);
         if (parsed && typeof parsed === 'object') { // Basic validation
@@ -117,28 +113,43 @@ export default function DashboardPage() {
   // Load Calorie Data
   useEffect(() => {
     setIsLoadingCalories(true);
+    if (!address) { // Don't try to load if address isn't available
+        setIsLoadingCalories(false);
+        return;
+    }
     try {
-      const storedCalories = localStorage.getItem(CALORIES_STORAGE_KEY);
+      // Use the correct, unified key with address
+      const key = `${CALORIES_STORAGE_KEY}-${address}`;
+      console.log("Dashboard: Loading calories from key:", key); // Debug log
+      const storedCalories = localStorage.getItem(key);
       if (storedCalories) {
          const parsed = JSON.parse(storedCalories);
          if (parsed && typeof parsed === 'object') { // Basic validation
+            console.log("Dashboard: Parsed calories:", parsed); // Debug log
             setAllCalories(parsed as AllCalories);
          } else {
-             localStorage.removeItem(CALORIES_STORAGE_KEY); // Clear invalid data
+             console.warn("Dashboard: Invalid calorie data found, clearing."); // Debug log
+             localStorage.removeItem(key); // Clear invalid data using the correct key
+             setAllCalories({}); // Reset state
          }
+      } else {
+          console.log("Dashboard: No calories found in storage for key:", key); // Debug log
+          setAllCalories({}); // Reset state
       }
     } catch (error) {
-      console.error("Failed to load calories:", error);
+      console.error("Dashboard: Failed to load calories:", error);
+      setAllCalories({}); // Reset state on error
     } finally {
       setIsLoadingCalories(false);
     }
-  }, []);
+    // Add address to dependency array to reload if user connects/disconnects
+  }, [address]);
 
   // --- Load Meal Plan Data ---
   useEffect(() => {
     setIsLoadingMealPlan(true);
     try {
-      const storedPlan = localStorage.getItem(MEAL_PLAN_STORAGE_KEY);
+      const storedPlan = localStorage.getItem(`${MEAL_PLAN_STORAGE_KEY}-${address}`);
       if (storedPlan) {
         const parsed = JSON.parse(storedPlan);
         // Basic validation for the plan structure
@@ -158,81 +169,96 @@ export default function DashboardPage() {
 
   // --- Calculate Analytics ---
   const analytics = useMemo(() => {
-    const today = new Date();
-    const todayKey = formatDateKey(today);
-    const todaysData = allCalories[todayKey] || { breakfast: 0, lunch: 0, supper: 0 };
-    const totalToday = calculateDailyTotal(todaysData);
+    const todayKey = formatDateKey(new Date());
+    const todayData = allCalories[todayKey];
+    const todayTotal = calculateDailyTotal(todayData);
+
+    const weeklyData = [];
+    const allLoggedFoods: string[] = []; // Array to hold all food item strings
+    const foodCounts: { [key: string]: number } = {}; // Count occurrences of each food
+
+    // Calculate data for the last 7 days
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateKey = formatDateKey(date);
+      const dailyTotal = calculateDailyTotal(allCalories[dateKey]);
+      weeklyData.push({
+        name: date.toLocaleDateString('en-US', { weekday: 'short' }), // e.g., 'Mon'
+        calories: dailyTotal,
+        date: dateKey,
+      });
+
+      // --- START: Updated Food Item Processing ---
+      const dailyMealData = allCalories[dateKey];
+      if (dailyMealData) {
+        // Helper to process items from a CalorieLogEntry array
+        const processItems = (logEntries: CalorieLogEntry[] | undefined) => {
+          if (!logEntries) return;
+
+          logEntries.forEach(entry => { // 'entry' is a CalorieLogEntry object
+            // Check if the entry object has an 'items' array
+            if (Array.isArray(entry.items)) {
+              entry.items.forEach(itemString => { // 'itemString' is the actual food name string
+                if (typeof itemString === 'string') { // Ensure it's a string
+                  const lowerItem = itemString.toLowerCase();
+                  allLoggedFoods.push(lowerItem); // Add the string to the list
+                  foodCounts[lowerItem] = (foodCounts[lowerItem] || 0) + 1; // Count it
+                } else {
+                   console.warn("Dashboard analytics: Found non-string item within entry.items:", itemString, "in entry:", entry);
+                }
+              });
+            }
+             // Optional: Warn if an entry doesn't have the expected items array
+             // else {
+             //    console.warn("Dashboard analytics: CalorieLogEntry missing 'items' array:", entry);
+             // }
+          });
+        };
+
+        // Process items for each meal type for the day
+        processItems(dailyMealData.breakfastItems);
+        processItems(dailyMealData.lunchItems);
+        processItems(dailyMealData.supperItems);
+      }
+      // --- END: Updated Food Item Processing ---
+    }
+
+    // Find most common foods (example: top 5)
+    const commonFoods = Object.entries(foodCounts)
+      .sort(([, countA], [, countB]) => countB - countA) // Sort by count descending
+      .slice(0, 5) // Take top 5
+      .map(([food]) => food); // Get just the food names
 
     const calorieTarget = profile?.calorieTarget ? Number(profile.calorieTarget) : 0;
-    const caloriesRemaining = calorieTarget > 0 ? Math.max(0, calorieTarget - totalToday) : null;
-    const progressPercent = calorieTarget > 0 && totalToday > 0 ? Math.min(100, (totalToday / calorieTarget) * 100) : 0;
+    const hasTarget = !!calorieTarget && calorieTarget > 0;
 
-    // --- Weekly Chart Data Calculation ---
-    let weeklyTotal = 0;
-    let daysLoggedForAvg = 0; // Use a separate counter for average calculation
-    const chartData = [];
-    for (let i = 6; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(today.getDate() - i);
-        const dateKey = formatDateKey(date);
-        const dayData = allCalories[dateKey];
-        const dayTotal = dayData ? calculateDailyTotal(dayData) : 0;
+    // --- START: Calculate remaining and progress ---
+    let caloriesRemaining: number | null = null;
+    let progressPercent = 0;
 
-        // Only count days with actual logs towards the weekly average shown
-        if (dayData) {
-            weeklyTotal += dayTotal;
-            daysLoggedForAvg++;
-        }
-
-        chartData.push({
-            name: date.toLocaleDateString('en-US', { weekday: 'short' }),
-            calories: dayTotal,
-        });
+    if (hasTarget) {
+      caloriesRemaining = calorieTarget - todayTotal;
+      // Ensure progress doesn't exceed 100 unless you want it to show overflow
+      progressPercent = Math.min(100, (todayTotal / calorieTarget) * 100);
+      if (isNaN(progressPercent) || !isFinite(progressPercent)) {
+          progressPercent = 0; // Handle division by zero or invalid numbers
+      }
     }
-    const averageWeekly = daysLoggedForAvg > 0 ? Math.round(weeklyTotal / daysLoggedForAvg) : 0;
-    // --- End Weekly Chart Data Calculation ---
-
-
-    // --- Overall Common Foods & All Logged Foods Calculation ---
-    const allItemsFrequency: { [item: string]: number } = {};
-    const uniqueLoggedFoods = new Set<string>(); // Use a Set for uniqueness
-
-    Object.values(allCalories).forEach(dayData => {
-        if (dayData) {
-            const processItems = (items: string[] | undefined) => {
-                (items || []).forEach(item => {
-                    const lowerItem = item.toLowerCase();
-                    allItemsFrequency[lowerItem] = (allItemsFrequency[lowerItem] || 0) + 1;
-                    uniqueLoggedFoods.add(lowerItem); // Add to Set for unique list
-                });
-            };
-            processItems(dayData.breakfastItems);
-            processItems(dayData.lunchItems);
-            processItems(dayData.supperItems);
-        }
-    });
-
-    // Get top 5 common foods
-    const commonFoods = Object.entries(allItemsFrequency)
-        .sort(([, countA], [, countB]) => countB - countA)
-        .slice(0, 5)
-        .map(([item]) => item);
-
-    // Convert Set to sorted array for display
-    const allLoggedFoods = Array.from(uniqueLoggedFoods).sort();
-    // --- End Calculations ---
-
+    // --- END: Calculate remaining and progress ---
 
     return {
-        totalToday, caloriesRemaining, progressPercent, todaysData,
-        averageWeekly, // Based on last 7 logged days
-        chartData, // Last 7 days
-        commonFoods, // Based on ALL loaded data
-        allLoggedFoods, // <-- Add the new list here
-        hasTarget: calorieTarget > 0,
-        calorieTarget
+      todayTotal,
+      todayData,
+      chartData: weeklyData,
+      calorieTarget: calorieTarget,
+      hasTarget: hasTarget,
+      allLoggedFoods: [...new Set(allLoggedFoods)],
+      commonFoods: commonFoods,
+      caloriesRemaining: caloriesRemaining,
+      progressPercent: progressPercent,
     };
-  }, [profile, allCalories]);
+  }, [allCalories, profile]);
 
   // --- Fetch General Recommendations useEffect ---
   useEffect(() => {
@@ -262,9 +288,10 @@ export default function DashboardPage() {
       .then((data: { recommendations: string[] }) => {
         setRecommendations(data.recommendations || []);
       })
-      .catch((error: any) => {
+      .catch((error: unknown) => {
         console.error("Failed to fetch recommendations:", error);
-        setErrorRecs(error.message || "Could not load suggestions.");
+        const message = error instanceof Error ? error.message : "Could not load suggestions.";
+        setErrorRecs(message);
         setRecommendations([]); // Clear recommendations on error
       })
       .finally(() => {
@@ -314,7 +341,7 @@ export default function DashboardPage() {
                     {/* Total and Remaining */}
                     <div className="flex justify-around items-center text-center">
                         <div>
-                            <p className="text-2xl font-bold text-[var(--app-foreground)]">{analytics.totalToday}</p>
+                            <p className="text-2xl font-bold text-[var(--app-foreground)]">{analytics.todayTotal}</p>
                             <p className="text-xs text-[var(--app-foreground-muted)]">Calories Eaten</p>
                         </div>
                         <div className="h-10 border-l border-[var(--app-card-border)]"></div> {/* Divider */}
@@ -347,18 +374,18 @@ export default function DashboardPage() {
 
           {/* --- Today's Meals Card --- */}
           <Card title="Today's Meals" className="lg:col-span-1">
-            {analytics.totalToday > 0 ? (
+            {analytics.todayTotal > 0 ? (
                 <div className="grid grid-cols-3 gap-3 text-center">
                     <div>
-                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todaysData.breakfast || 0}</p>
+                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todayData.breakfast || 0}</p>
                         <p className="text-xs text-[var(--app-foreground-muted)]">🍳 Breakfast</p>
                     </div>
                     <div>
-                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todaysData.lunch || 0}</p>
+                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todayData.lunch || 0}</p>
                         <p className="text-xs text-[var(--app-foreground-muted)]">🥪 Lunch</p>
                     </div>
                     <div>
-                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todaysData.supper || 0}</p>
+                        <p className="text-lg font-semibold text-[var(--app-foreground)]">{analytics.todayData.supper || 0}</p>
                         <p className="text-xs text-[var(--app-foreground-muted)]">🍲 Supper</p>
                     </div>
                 </div>
@@ -388,7 +415,7 @@ export default function DashboardPage() {
           <Card title="Weekly Trends" className="md:col-span-2 lg:col-span-3"> {/* Restored spans */}
              <div className="space-y-4">
                  <p className="text-sm text-[var(--app-foreground-muted)]">
-                    Average daily intake (last 7 logged days): <span className="font-semibold text-[var(--app-foreground)]">{analytics.averageWeekly} kcal</span>
+                    Average daily intake (last 7 logged days): <span className="font-semibold text-[var(--app-foreground)]">{analytics.chartData.some(d => d.calories > 0) ? analytics.chartData.reduce((a, b) => a + b.calories, 0) / analytics.chartData.length : 0} kcal</span>
                  </p>
                  {analytics.chartData.some(d => d.calories > 0) ? (
                     <div className="h-60 w-full">

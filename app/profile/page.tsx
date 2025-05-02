@@ -22,25 +22,24 @@ import {
     TransactionToastAction,
     type TransactionError,
     type TransactionResponse,
+    type APIError,
 } from "@coinbase/onchainkit/transaction";
-import { useState, type FormEvent, useEffect, useCallback, useMemo } from "react"; // Import more hooks
-import {QRCodeCanvas, QRCodeSVG} from "qrcode.react"; // Import QRCode Code component
+import { useState, type FormEvent, useEffect, useMemo } from "react"; // Import more hooks
+import {QRCodeSVG} from "qrcode.react"; // Import QRCode Code component
 import { parseEther } from "viem"; // Helper to convert ETH string to wei BigInt
 
-// Define types for profile data
-type HealthGoal = "weight_loss" | "weight_gain" | "maintenance";
-type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
+// --- Reward System Imports ---
+import { getUserData, saveUserData, UserData } from '@/src/lib/userData'; // Adjust path
+import { checkAndAwardMilestones } from '@/src/lib/rewards'; // Adjust path
+import { HealthProfile, AllCalories } from "@/src/lib/types"; // Assuming types are defined here
+import { MILESTONES, Milestone } from '@/src/config/milestones'; // Import MILESTONES and Milestone type
+// --- End Reward System Imports ---
 
-interface HealthProfile {
-  age: number | "";
-  gender: string;
-  height: number | ""; // Consider units (cm/inches)
-  weight: number | ""; // Consider units (kg/lbs)
-  goal: HealthGoal;
-  activityLevel: ActivityLevel;
-  restrictions: string;
-  calorieTarget: number | "";
-}
+
+// // Define types for profile data
+// type HealthGoal = "weight_loss" | "weight_gain" | "maintenance";
+// type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
+
 
 const LOCAL_STORAGE_KEY = "caloai-healthProfile"; // Define a key for local storage
 
@@ -117,137 +116,148 @@ function ReceiveModal({ isOpen, onClose, address }: ReceiveModalProps) {
 interface SendModalProps {
   isOpen: boolean;
   onClose: () => void;
-  userAddress: `0x${string}`; // Needed for Transaction component if sending from user
+  userAddress: `0x${string}`; // Keep userAddress prop for display/logic if needed elsewhere
 }
 
 function SendModal({ isOpen, onClose, userAddress }: SendModalProps) {
-    const [recipientAddress, setRecipientAddress] = useState<`0x${string}` | "">("");
-    const [sendAmount, setSendAmount] = useState<string>(""); // Store as string for input
-    const [error, setError] = useState<string | null>(null);
+  const [recipient, setRecipient] = useState<string>("");
+  const [sendAmount, setSendAmount] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-    // Construct transaction calls based on input
-    const calls = useMemo(() => {
-        setError(null); // Reset error on input change
-        if (!recipientAddress || !sendAmount) return [];
-        try {
-            const amountInWei = parseEther(sendAmount); // Convert ETH string to wei BigInt
-            if (amountInWei <= 0n) {
-                setError("Amount must be positive.");
-                return [];
-            }
-            // Basic address validation (more robust validation recommended)
-            if (!/^0x[a-fA-F0-9]{40}$/.test(recipientAddress)) {
-                 setError("Invalid recipient address format.");
-                 return [];
-            }
+  // Reset form when modal opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      setRecipient("");
+      setSendAmount("");
+      setError(null);
+      setSuccessMessage(null);
+    }
+  }, [isOpen]);
 
-            return [{
-                to: recipientAddress,
-                value: amountInWei,
-                data: "0x" as `0x${string}`, // No data for basic ETH transfer
-            }];
-        } catch (e) {
-            console.error("Error parsing amount:", e);
-            setError("Invalid amount entered.");
-            return [];
-        }
-    }, [recipientAddress, sendAmount]);
+  const handleSuccess = (response: TransactionResponse) => {
+    console.log("Transaction successful:", response);
+    const txHash = response.receipt?.transactionHash || 'N/A';
+    setSuccessMessage(`Transaction successful! Hash: ${txHash.substring(0, 10)}...`);
+    setError(null);
+    // Optionally close modal after a delay or keep it open to show success
+    // setTimeout(onClose, 3000);
+  };
 
-    const handleSuccess = useCallback((response: TransactionResponse) => {
-        console.log("Transaction successful:", response);
-        setRecipientAddress("");
-        setSendAmount("");
-        setError(null);
-        onClose(); // Close modal on success
-        // Optionally show a success notification
-    }, [onClose]);
+  const handleError = (txError: APIError) => {
+    console.error("Transaction error:", txError);
+    const message = txError.message || "Transaction failed.";
+    setError(message);
+    setSuccessMessage(null);
+  };
 
-    const handleError = useCallback((txError: TransactionError) => {
-        console.error("Transaction failed:", txError);
-        setError(txError.message || "Transaction failed. Please try again.");
-        // Don't close modal on error, let user see the message
-    }, []);
-
-    const inputClasses = "mt-1 block w-full px-3 py-2 bg-[var(--app-card-bg)] border border-[var(--app-card-border)] rounded-md text-[var(--app-foreground)] placeholder-[var(--app-foreground-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--app-accent)]";
-    const labelClasses = "block text-sm font-medium text-[var(--app-foreground-muted)]";
+  // Prepare transaction calls (memoized)
+  const calls = useMemo(() => {
+    setError(null); // Clear error when inputs change
+    setSuccessMessage(null); // Clear success when inputs change
+    if (!recipient || !sendAmount) {
+      return []; // No calls if inputs are missing
+    }
+    // Basic validation for recipient address
+    if (!/^0x[a-fA-F0-9]{40}$/.test(recipient)) {
+      setError("Invalid recipient address format.");
+      return [];
+    }
+    try {
+      const amountInWei = parseEther(sendAmount); // Convert ETH string to wei BigInt
+      if (amountInWei <= 0n) {
+        setError("Amount must be positive.");
+        return [];
+      }
+      // Prepare the transaction call object
+      return [{
+        to: recipient as `0x${string}`, // Type assertion after validation
+        value: amountInWei,
+        data: '0x' as `0x${string}`, // For simple ETH transfer, data is '0x'
+      }];
+    } catch (e) {
+      console.error("Error parsing amount:", e);
+      setError("Invalid amount entered.");
+      return [];
+    }
+  }, [recipient, sendAmount]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Send Funds">
+    <Modal isOpen={isOpen} onClose={onClose} title="Send ETH">
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="recipient" className="block text-sm font-medium text-[var(--app-foreground-muted)] mb-1">Recipient Address</label>
+          <input
+            type="text"
+            id="recipient"
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
+            placeholder="0x..."
+            className="w-full px-3 py-2 rounded-md border border-[var(--app-card-border)] bg-[var(--app-gray)] text-[var(--app-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--app-accent)]"
+            required
+          />
+        </div>
+        <div>
+          <label htmlFor="amount" className="block text-sm font-medium text-[var(--app-foreground-muted)] mb-1">Amount (ETH)</label>
+          <input
+            type="number" // Use number for easier input, but parse carefully
+            id="amount"
+            value={sendAmount}
+            onChange={(e) => setSendAmount(e.target.value)}
+            placeholder="0.01"
+            className="w-full px-3 py-2 rounded-md border border-[var(--app-card-border)] bg-[var(--app-gray)] text-[var(--app-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--app-accent)]"
+            required
+            step="any" // Allow decimals
+            min="0"
+          />
+        </div>
+
+        {error && <p className="text-sm text-red-500 text-center">{error}</p>}
+        {successMessage && <p className="text-sm text-green-500 text-center">{successMessage}</p>}
+
+        {/* Transaction Component Integration */}
         <Transaction
             calls={calls}
-            address={userAddress}
+            // Remove the address prop - it uses the connected wallet context
+            // address={userAddress}
             onSuccess={handleSuccess}
             onError={handleError}
         >
-            <div className="space-y-4">
-                <div>
-                    <label htmlFor="recipientAddress" className={labelClasses}>Recipient Address</label>
-                    <input
-                        type="text"
-                        id="recipientAddress"
-                        name="recipientAddress"
-                        value={recipientAddress}
-                        onChange={(e) => setRecipientAddress(e.target.value as `0x${string}`)}
-                        className={inputClasses}
-                        placeholder="0x..."
-                        required
-                    />
-                </div>
-                <div>
-                    <label htmlFor="sendAmount" className={labelClasses}>Amount (ETH)</label>
-                    <input
-                        type="number" // Use number for better mobile keyboards, but handle as string
-                        id="sendAmount"
-                        name="sendAmount"
-                        value={sendAmount}
-                        onChange={(e) => setSendAmount(e.target.value)}
-                        className={inputClasses}
-                        placeholder="0.0"
-                        required
-                        step="any" // Allow decimals
-                        min="0"
-                    />
-                </div>
+          <TransactionStatus>
+            <TransactionStatusAction className="w-full">
+              <TransactionButton className="w-full" disabled={calls.length === 0 || !!error}>
+                {/* Default text is usually fine, or customize */}
+                Send Transaction
+              </TransactionButton>
+            </TransactionStatusAction>
+            <TransactionStatusLabel className="mt-2 text-center text-xs text-[var(--app-foreground-muted)]" />
+          </TransactionStatus>
+        </Transaction>
 
-                {error && <p className="text-sm text-red-500">{error}</p>}
+        <TransactionToast>
+          <TransactionToastIcon />
+          <TransactionToastLabel />
+          <TransactionToastAction />
+        </TransactionToast>
 
-                <TransactionStatus className="mt-3">
-                    <TransactionStatusAction>
-                        {/* Customizing the button text/state if needed */}
-                        <TransactionButton className="w-full">
-                            {/* Default text is usually fine, or customize */}
-                            Send Transaction
-                        </TransactionButton>
-                    </TransactionStatusAction>
-                    <TransactionStatusLabel />
-                </TransactionStatus>
-
-                <TransactionToast className="absolute bottom-4 right-4 mb-4 mr-4">
-                    <TransactionToastIcon />
-                    <TransactionToastLabel />
-                    <TransactionToastAction />
-                </TransactionToast>
-
-                 <Button onClick={onClose} variant="outline" className="w-full mt-2">
-                    Cancel
-                </Button>
-            </div>
-      </Transaction>
+        <Button onClick={onClose} variant="outline" className="w-full mt-2">
+          Cancel
+        </Button>
+      </div>
     </Modal>
   );
 }
 
-// --- Profile Page Component ---
 
 export default function ProfilePage() {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const [profile, setProfile] = useState<HealthProfile>({
     age: "",
     gender: "",
     height: "",
     weight: "",
     goal: "maintenance",
-    activityLevel: "moderate",
+    activityLevel: "sedentary",
     restrictions: "",
     calorieTarget: "",
   });
@@ -255,30 +265,72 @@ export default function ProfilePage() {
   const [isLoading, setIsLoading] = useState(true); // Add loading state
   const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false); // State for Receive modal
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);     // State for Send modal
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Load profile from Local Storage on component mount
+  // --- Add State for User Reward Data ---
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const [isLoadingUserData, setIsLoadingUserData] = useState(true);
+
+  // --- Load Profile & User Reward Data ---
   useEffect(() => {
     setIsLoading(true);
-    try {
-      const storedProfile = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (storedProfile) {
-        const parsedProfile = JSON.parse(storedProfile) as HealthProfile;
-        // Basic validation (can be more robust)
-        if (parsedProfile && typeof parsedProfile === 'object') {
-            setProfile(parsedProfile);
-            setIsProfileCreated(true);
+    setIsLoadingUserData(true); // Start loading user data
+    setUserData(null); // Reset user data on address change
+    if (address) {
+      try {
+        // Load Profile
+        const storedProfile = localStorage.getItem(`${LOCAL_STORAGE_KEY}-${address}`);
+        if (storedProfile) {
+          const parsed = JSON.parse(storedProfile);
+          setProfile(parsed);
+          setIsProfileCreated(true);
         } else {
-            console.warn("Invalid profile data found in local storage.");
-            localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear invalid data
+          setProfile({
+            age: "", gender: "", height: "", weight: "",
+            goal: "maintenance", activityLevel: "sedentary", restrictions: "",
+            calorieTarget: "",
+          });
+          setIsProfileCreated(false);
         }
+
+        // Load User Reward Data
+        const fetchedUserData = getUserData(address);
+        setUserData(fetchedUserData);
+        console.log("Loaded user reward data:", fetchedUserData);
+
+      } catch (error) {
+        console.error("Failed to load profile or user data:", error);
+        setProfile({
+          age: "", gender: "", height: "", weight: "",
+          goal: "maintenance", activityLevel: "sedentary", restrictions: "",
+          calorieTarget: "",
+        });
+        setIsProfileCreated(false);
+        setUserData(getUserData(address)); // Still try to get default user data on error
+      } finally {
+        setIsLoading(false);
+        setIsLoadingUserData(false); // Finish loading user data
       }
-    } catch (error) {
-      console.error("Failed to load profile from local storage:", error);
-      // Handle potential errors like disabled local storage or parsing issues
-    } finally {
-        setIsLoading(false); // Finish loading
+    } else {
+      // No address connected
+      setIsLoading(false);
+      setIsProfileCreated(false);
+      setProfile({
+        age: "", gender: "", height: "", weight: "",
+        goal: "maintenance", activityLevel: "sedentary", restrictions: "",
+        calorieTarget: "",
+      });
+      setUserData(null);
     }
-  }, []); // Empty dependency array ensures this runs only once on mount
+  }, [address]); // Reload profile and user data if address changes
+
+  // --- Calculate Unachieved Milestones ---
+  const unachievedMilestones = useMemo(() => {
+    if (!userData) return [];
+    const achievedIds = new Set(userData.achievedMilestones);
+    return MILESTONES.filter(milestone => !achievedIds.has(milestone.id));
+  }, [userData]); // Recalculate only when userData changes
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>,
@@ -292,24 +344,68 @@ export default function ProfilePage() {
     }));
   };
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    console.log("Health Profile Submitted:", profile);
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!address || !profile) return; // Ensure address and profile data exist
+
+    setIsLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+
     try {
-      // Save to Local Storage
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(profile));
-      setIsProfileCreated(true); // Mark profile as created for display purposes
-      // You might want to show a success message here
-    } catch (error) {
-      console.error("Failed to save profile to local storage:", error);
-      // Handle potential errors like storage limit exceeded
-      // Show an error message to the user
+      // 1. Save the profile data (assuming this function exists and works)
+      // save(address, profile); // Example function call
+
+      // For local storage:
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}-${address}`, JSON.stringify(profile));
+      console.log("Profile saved to local storage:", profile);
+
+
+      // 2. Check for milestones related to profile completion
+      if (userData) { // Ensure userData is loaded
+          console.log("Checking profile milestones after save...");
+          // Destructure according to the new return type
+          const { updatedUserData: finalUserData, newlyAchieved: newlyAchievedIds } = checkAndAwardMilestones(
+              userData,
+              profile, // Pass profile data
+              null     // No meal context needed here
+          );
+
+          // 3. If milestones were awarded, save the updated user data
+          if (newlyAchievedIds.length > 0) { // Check if the array has items
+              console.log("Profile milestones awarded, saving updated user data...");
+              await saveUserData(address, finalUserData); // Save to backend/storage
+              setUserData(finalUserData); // Update local state to reflect changes immediately
+              console.log("User data updated with new points/milestones.");
+              // Optionally show a success message about points earned
+              setSuccessMessage("Profile saved successfully! Points awarded for milestones.");
+              // Optionally trigger notifications
+              newlyAchievedIds.forEach(id => {
+                  const milestone = MILESTONES.find(m => m.id === id);
+                  if (milestone) {
+                      console.log(`UI NOTIFICATION: Milestone Achieved - ${milestone.name} (+${milestone.points} Points)`);
+                      // alert(`Milestone Achieved: ${milestone.name} (+${milestone.points} Points)`); // Replace with toast
+                  }
+              });
+          } else {
+               setSuccessMessage("Profile saved successfully."); // No new points awarded
+          }
+      } else {
+           setSuccessMessage("Profile saved successfully. (Could not check milestones - user data not loaded)");
+      }
+
+
+    } catch (err) {
+      console.error("Error saving profile:", err);
+      setError("Failed to save profile. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
   // Basic input styling (you can enhance this or create dedicated components)
-  const inputClasses = "mt-1 block w-full px-3 py-2 bg-[var(--app-card-bg)] border border-[var(--app-card-border)] rounded-md text-[var(--app-foreground)] placeholder-[var(--app-foreground-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--app-accent)]";
-  const labelClasses = "block text-sm font-medium text-[var(--app-foreground-muted)]";
+  const inputClasses = "mt-1 block w-full px-3 py-2 bg-[var(--app-card-bg)] border border-[var(--app-card-border)] rounded-md text-[var(--app-foreground)] placeholder-[var(--app-foreground-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--app-accent)] disabled:opacity-50";
+  const labelClasses = "block text-sm font-medium text-[var(--app-foreground-muted)] mb-1";
 
   // Display loading indicator while checking local storage
   if (isLoading) {
@@ -319,6 +415,11 @@ export default function ProfilePage() {
         </div>
     );
   }
+
+  // --- Get Milestone Details ---
+  const getMilestoneDetails = (id: string) => {
+      return MILESTONES.find(m => m.id === id);
+  };
 
   return (
     <> {/* Use Fragment to allow modals outside the main layout flow */}
@@ -428,7 +529,9 @@ export default function ProfilePage() {
                          <span className="text-xl" role="img" aria-label="Target">🎯</span>
                         <div>
                           <p className="text-xs font-medium text-[var(--app-foreground-muted)]">Goal</p>
-                          <p className="text-sm font-semibold text-[var(--app-foreground)] capitalize">{profile.goal.replace("_", " ") || "N/A"}</p>
+                          <p className="text-sm font-semibold text-[var(--app-foreground)] capitalize">
+                            {profile.goal?.replace('_', ' ') ?? 'N/A'}
+                          </p>
                         </div>
                       </div>
 
@@ -437,7 +540,9 @@ export default function ProfilePage() {
                          <span className="text-xl" role="img" aria-label="Fire">🔥</span>
                         <div>
                           <p className="text-xs font-medium text-[var(--app-foreground-muted)]">Activity</p>
-                          <p className="text-sm font-semibold text-[var(--app-foreground)] capitalize">{profile.activityLevel || "N/A"}</p>
+                          <p className="text-sm font-semibold text-[var(--app-foreground)] capitalize">
+                            {profile.activityLevel?.replace('_', ' ') ?? 'N/A'}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -528,12 +633,64 @@ export default function ProfilePage() {
                     </div> */}
 
                     <Button type="submit" variant="primary" className="w-full">
-                      Save Profile
+                      {isProfileCreated ? "Update Profile" : "Save Profile"}
                     </Button>
                   </form>
                 )}
               </Card>
             )}
+
+            {/* --- NEW: Rewards & Milestones Card --- */}
+            {address && userData && (
+              <Card title="🏆 Rewards & Milestones" className="md:col-span-1">
+                {isLoadingUserData ? (
+                   <p className="text-center text-sm text-[var(--app-foreground-muted)]">Loading rewards...</p>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Display Points */}
+                    <div className="text-center p-3 bg-[var(--app-gray)] rounded-lg">
+                      <p className="text-sm font-medium text-[var(--app-foreground-muted)]">Your Points</p>
+                      {/* Access points from userData state */}
+                      <p className="text-4xl font-bold text-[var(--app-accent)]">{userData.points ?? 0}</p>
+                    </div>
+
+                    {/* Display Current Streak */}
+                    <div className="text-sm">
+                      <p><span className="font-semibold">Current Streak:</span> {userData.currentStreak} day{userData.currentStreak !== 1 ? 's' : ''} 🔥</p>
+                      <p><span className="font-semibold">Last Logged:</span> {userData.lastTrackedDate ? new Date(userData.lastTrackedDate + 'T00:00:00').toLocaleDateString() : 'Never'}</p>
+                    </div>
+
+                    {/* Display Achieved Milestones */}
+                    <div>
+                      <h4 className="font-semibold mb-2 border-b border-[var(--app-card-border)] pb-1">Achieved Milestones:</h4>
+                      {userData.achievedMilestones.length > 0 ? (
+                        <ul className="space-y-1 list-disc list-inside text-sm">
+                          {userData.achievedMilestones.map(msId => {
+                             const details = getMilestoneDetails(msId);
+                             return details ? (
+                               <li key={msId} title={details.description}>{details.name}</li>
+                             ) : (
+                               <li key={msId}>{msId} (details not found)</li>
+                             );
+                          })}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-[var(--app-foreground-muted)]">No milestones achieved yet. Keep tracking!</p>
+                      )}
+                    </div>
+
+                    {/* Display Totals */}
+                     <div className="text-sm border-t border-[var(--app-card-border)] pt-3 mt-3">
+                         <p><span className="font-semibold">Total Meals Logged:</span> {userData.totalMealsLogged}</p>
+                         <p><span className="font-semibold">Total AI Scans Used:</span> {userData.totalAiScans}</p>
+                     </div>
+
+                  </div>
+                )}
+              </Card>
+            )}
+            {/* --- END: Rewards & Milestones Card --- */}
+
           </main>
         </div>
       </div>

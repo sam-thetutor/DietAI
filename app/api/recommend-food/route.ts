@@ -17,9 +17,9 @@ interface RecommendationRequest {
     commonFoods: string[]; // Top 5 overall common foods
 }
 
-interface RecommendationResponse {
-    recommendations: string[];
-}
+// interface RecommendationResponse {
+//     recommendations: string[];
+// }
 
 export async function POST(request: Request) {
   if (!API_KEY) {
@@ -108,21 +108,24 @@ export async function POST(request: Request) {
         // Validate the structure
         if (jsonResponse && Array.isArray(jsonResponse.recommendations)) {
             // Further validation: ensure items in array are strings
-            const validRecommendations = jsonResponse.recommendations.filter((item: any) => typeof item === 'string');
+            const validRecommendations = jsonResponse.recommendations.filter(
+                (item: unknown): item is string => typeof item === 'string'
+            );
             console.log("Parsed General Recommendations:", validRecommendations);
             return NextResponse.json({ recommendations: validRecommendations });
         } else {
             console.error("Gemini response did not contain expected JSON structure:", responseText);
             return NextResponse.json({ error: 'AI response format incorrect. Expected { "recommendations": string[] }' }, { status: 500 });
         }
-    } catch (parseError) {
+    } catch (parseError: unknown) {
         console.error("Failed to parse Gemini recommendation response as JSON:", parseError, "\nResponse Text:", responseText);
-        return NextResponse.json({ error: 'Failed to parse AI recommendation response.' }, { status: 500 });
+        const errorMessage = parseError instanceof Error ? parseError.message : 'Failed to parse AI recommendation response.';
+        return NextResponse.json({ error: errorMessage }, { status: 500 });
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error calling Gemini API for recommendations:', error);
-    const message = error.message || 'Failed to get food recommendations.';
+    const message = error instanceof Error ? error.message : 'Failed to get food recommendations.';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

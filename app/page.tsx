@@ -3,7 +3,6 @@
 import {
   useMiniKit,
   useAddFrame,
-  useOpenUrl,
 } from "@coinbase/onchainkit/minikit";
 import {
   Name,
@@ -21,14 +20,14 @@ import {
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useAccount } from "wagmi";
 import Link from "next/link";
-import { Button, Card, Icon, TodoList, TransactionCard } from "./components/DemoComponents";
+import Image from "next/image";
+import { Button, Card, Icon } from "./components/DemoComponents";
 
 export default function App() {
   const { setFrameReady, isFrameReady, context } = useMiniKit();
   const [frameAdded, setFrameAdded] = useState(false);
 
   const addFrame = useAddFrame();
-  const openUrl = useOpenUrl();
   const { address } = useAccount();
 
   useEffect(() => {
@@ -94,6 +93,8 @@ export default function App() {
           <div>{saveFrameButton}</div>
         </header>
 
+
+
         <main className="flex-1 space-y-6  rounded-lg p-4 min-h-[500px]">
 
           {address && (
@@ -126,10 +127,13 @@ export default function App() {
             </div>
 
             <div className="flex justify-center">
-              <img 
+              <Image
                 src="/logo.png"
-                alt="CaloAI Logo" 
-                className="w-48 h-48 rounded-lg shadow-lg"
+                alt="CaloAI Logo"
+                width={192}
+                height={192}
+                className="rounded-lg shadow-lg"
+                priority
               />
             </div>
 

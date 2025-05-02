@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '../components/DemoComponents'; // Adjust path as needed
+import Image from 'next/image';
 
 // --- Camera Modal Component ---
 export interface CameraModalProps { // Export the interface
     isOpen: boolean;
     onClose: () => void;
-    onCaptureSuccess: () => void;
+    onCaptureSuccess: (imageDataUrl: string, mealType: 'breakfast' | 'lunch' | 'supper' | null) => void;
     mealType: 'breakfast' | 'lunch' | 'supper' | null;
 }
 
@@ -61,7 +62,9 @@ export default function CameraModal({ isOpen, onClose, onCaptureSuccess, mealTyp
                                 setStream(mediaStream);
                                 if (videoRef.current) {
                                     videoRef.current.srcObject = mediaStream;
-                                    try { await videoRef.current.play(); } catch (e) {}
+                                    try { await videoRef.current.play(); } catch (e) {
+                                        console.warn("Video play interrupted or failed:", e);
+                                    }
                                 }
                                 setCurrentFacingMode(fallbackMode);
                                 setError(null);
@@ -121,13 +124,15 @@ export default function CameraModal({ isOpen, onClose, onCaptureSuccess, mealTyp
                 if (currentFacingMode === 'user') {
                     context.setTransform(1, 0, 0, 1, 0, 0);
                 }
+                //convert canvas to base64
+                
                 const imageDataUrl = canvas.toDataURL('image/png');
                 console.log(imageDataUrl);
                 setCapturedImage(imageDataUrl);
                 console.log(`Simulating AI analysis for ${mealType}... Setting calories to 400.`);
                 setTimeout(() => {
                     
-                    onCaptureSuccess();
+                    onCaptureSuccess(imageDataUrl, mealType);
                     handleClose(); // Close after success
                 }, 1000);
             }
@@ -188,7 +193,7 @@ export default function CameraModal({ isOpen, onClose, onCaptureSuccess, mealTyp
                         ></video>
                         <canvas ref={canvasRef} className="hidden"></canvas>
                         {capturedImage && (
-                            <img src={capturedImage} alt="Captured meal" className="absolute inset-0 w-full h-full object-contain" />
+                            <Image src={capturedImage} alt="Captured meal" className="absolute inset-0 w-full h-full object-contain" width={640} height={480} />
                         )}
                          {!stream && !error && !capturedImage && (
                             <div className="absolute inset-0 flex items-center justify-center text-white/80">Starting Camera...</div>
